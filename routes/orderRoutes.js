@@ -3,6 +3,7 @@ const { ObjectId } = require("mongodb");
 const { ordersCollection, mealsCollection } = require("../config/db");
 const verifyToken = require("../middlewares/verifyToken");
 const { verifyChef, verifyActive } = require("../middlewares/verifyRole");
+const { isPublicMeal } = require("../utils/mealVisibility");
 
 const router = express.Router();
 
@@ -14,24 +15,30 @@ const allowedChanges = {
 router.post("/orders", verifyToken, verifyActive, async (req, res) => {
   const { foodId, quantity, userAddress } = req.body;
 
-  if (!ObjectId.isValid(foodId)) {
+  if (typeof foodId !== "string" || !ObjectId.isValid(foodId)) {
     return res.status(400).send({ message: "Invalid meal id" });
   }
 
   const numericQuantity = Number(quantity);
 
-  if (!Number.isInteger(numericQuantity) || numericQuantity < 1) {
-    return res.status(400).send({ message: "Quantity must be at least 1" });
+  if (!Number.isInteger(numericQuantity) || numericQuantity < 1 || numericQuantity > 50) {
+    return res.status(400).send({ message: "Quantity must be between 1 and 50" });
   }
 
-  if (!userAddress) {
-    return res.status(400).send({ message: "Delivery address is required" });
+  if (typeof userAddress !== "string" || !userAddress.trim() || userAddress.length > 200) {
+    return res.status(400).send({ message: "A valid delivery address is required" });
   }
 
-    const meal = await mealsCollection.findOne({ _id: new ObjectId(foodId) });
+  const meal = await mealsCollection.findOne({ _id: new ObjectId(foodId) });
 
   if (!meal) {
     return res.status(404).send({ message: "Meal not found" });
+  }
+
+  if (!isPublicMeal(meal)) {
+    return res
+      .status(400)
+      .send({ message: "This meal is not available right now" });
   }
 
   if (meal.userEmail === req.decoded.email) {
@@ -48,7 +55,7 @@ router.post("/orders", verifyToken, verifyActive, async (req, res) => {
     estimatedDeliveryTime: meal.estimatedDeliveryTime,
     paymentStatus: "Pending",
     userEmail: req.decoded.email,
-    userAddress,
+    userAddress: userAddress.trim(),
     orderStatus: "pending",
     orderTime: new Date().toISOString(),
   });
@@ -75,7 +82,7 @@ router.get("/orders/chef/:chefId", verifyToken, verifyChef, async (req, res) => 
   }
 
   const orders = await ordersCollection
-    .find({ chefId: req.params.chefId })
+    .find({ chefId: req.params.chefId, chefHidden: { $ne: true } })
     .sort({ orderTime: -1 })
     .toArray();
 
@@ -104,12 +111,64 @@ router.patch("/orders/:id/status", verifyToken, verifyChef, async (req, res) => 
     return res.status(400).send({ message: "This status change is not allowed" });
   }
 
+  if (
+    orderStatus === "delivered" &&
+    order.paymentStatus.toLowerCase() !== "paid"
+  ) {
+    return res.status(400).send({
+      message: "The customer must pay before the order can be delivered",
+    });
+  }
+
   const result = await ordersCollection.updateOne(
     { _id: new ObjectId(id) },
     { $set: { orderStatus } }
   );
 
   res.send(result);
+});
+
+router.delete("/orders/chef/completed", verifyToken, verifyChef, async (req, res) => {
+  const result = await ordersCollection.updateMany(
+    {
+      chefId: req.user.chefId,
+      orderStatus: { $in: ["delivered", "cancelled"] },
+    },
+    { $set: { chefHidden: true } }
+  );
+
+  res.send({ removed: result.modifiedCount });
+});
+
+router.delete("/orders/:id", verifyToken, verifyChef, async (req, res) => {
+  const { id } = req.params;
+
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid order id" });
+  }
+
+  const order = await ordersCollection.findOne({ _id: new ObjectId(id) });
+
+  if (!order) {
+    return res.status(404).send({ message: "Order not found" });
+  }
+
+  if (order.chefId !== req.user.chefId) {
+    return res.status(403).send({ message: "forbidden access" });
+  }
+
+  if (!["delivered", "cancelled"].includes(order.orderStatus)) {
+    return res
+      .status(400)
+      .send({ message: "Only delivered or cancelled orders can be removed" });
+  }
+
+  await ordersCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { chefHidden: true } }
+  );
+
+  res.send({ success: true });
 });
 
 module.exports = router;

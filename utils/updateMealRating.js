@@ -4,7 +4,7 @@ const { reviewsCollection, mealsCollection } = require("../config/db");
 const updateMealRating = async (foodId) => {
   const result = await reviewsCollection
     .aggregate([
-      { $match: { foodId } },
+      { $match: { foodId, status: { $nin: ["pending", "rejected"] } } },
       { $group: { _id: null, average: { $avg: "$rating" } } },
     ])
     .toArray();

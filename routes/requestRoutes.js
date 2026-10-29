@@ -2,12 +2,12 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const { usersCollection, requestsCollection } = require("../config/db");
 const verifyToken = require("../middlewares/verifyToken");
-const { verifyAdmin } = require("../middlewares/verifyRole");
-const generateChefId = require("../utils/generateChefId");
+const { verifyAdmin, verifyActive } = require("../middlewares/verifyRole");
+const assignRole = require("../utils/assignRole");
 
 const router = express.Router();
 
-router.post("/requests", verifyToken, async (req, res) => {
+router.post("/requests", verifyToken, verifyActive, async (req, res) => {
   const { requestType } = req.body;
 
   if (!["chef", "admin"].includes(requestType)) {
@@ -80,7 +80,7 @@ router.patch("/requests/:id", verifyToken, verifyAdmin, async (req, res) => {
     return res.status(400).send({ message: "Invalid request id" });
   }
 
-  if (!["approve", "reject"].includes(action)) {
+  if (!["approve", "reject", "reopen"].includes(action)) {
     return res.status(400).send({ message: "Invalid action" });
   }
 
@@ -90,23 +90,44 @@ router.patch("/requests/:id", verifyToken, verifyAdmin, async (req, res) => {
     return res.status(404).send({ message: "Request not found" });
   }
 
+  if (action === "reopen") {
+    if (request.requestStatus !== "rejected") {
+      return res
+        .status(400)
+        .send({ message: "Only rejected requests can be reopened" });
+    }
+
+    const otherPending = await requestsCollection.findOne({
+      userEmail: request.userEmail,
+      requestStatus: "pending",
+    });
+
+    if (otherPending) {
+      return res
+        .status(400)
+        .send({ message: "This user already has another pending request" });
+    }
+
+    await requestsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { requestStatus: "pending" } }
+    );
+
+    return res.send({ success: true });
+  }
+
   if (request.requestStatus !== "pending") {
     return res.status(400).send({ message: "This request is already handled" });
   }
 
   if (action === "approve") {
-    if (request.requestType === "chef") {
-      const chefId = await generateChefId();
-      await usersCollection.updateOne(
-        { email: request.userEmail },
-        { $set: { role: "chef", chefId } }
-      );
-    } else {
-      await usersCollection.updateOne(
-        { email: request.userEmail },
-        { $set: { role: "admin" } }
-      );
+    const user = await usersCollection.findOne({ email: request.userEmail });
+
+    if (!user) {
+      return res.status(404).send({ message: "user not found" });
     }
+
+    await assignRole(user, request.requestType);
   }
 
   await requestsCollection.updateOne(

@@ -1,17 +1,13 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const cookieOptions = require("../utils/cookieOptions");
+const verifyFirebaseToken = require("../middlewares/verifyFirebaseToken");
 
 const router = express.Router();
 
-router.post("/jwt", (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).send({ message: "Email is required" });
-  }
-
-  const token = jwt.sign({ email }, process.env.JWT_SECRET, {
+router.post("/jwt", verifyFirebaseToken, (req, res) => {
+  const token = jwt.sign({ email: req.firebaseUser.email }, process.env.JWT_SECRET, {
+    algorithm: "HS256",
     expiresIn: "7d",
   });
 

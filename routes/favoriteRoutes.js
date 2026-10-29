@@ -2,20 +2,22 @@ const express = require("express");
 const { ObjectId } = require("mongodb");
 const { favoritesCollection, mealsCollection } = require("../config/db");
 const verifyToken = require("../middlewares/verifyToken");
+const { verifyActive } = require("../middlewares/verifyRole");
+const { isPublicMeal } = require("../utils/mealVisibility");
 
 const router = express.Router();
 
-router.post("/favorites", verifyToken, async (req, res) => {
+router.post("/favorites", verifyToken, verifyActive, async (req, res) => {
   const { mealId } = req.body;
   const userEmail = req.decoded.email;
 
-  if (!ObjectId.isValid(mealId)) {
+  if (typeof mealId !== "string" || !ObjectId.isValid(mealId)) {
     return res.status(400).send({ message: "Invalid meal id" });
   }
 
   const meal = await mealsCollection.findOne({ _id: new ObjectId(mealId) });
 
-  if (!meal) {
+  if (!meal || !isPublicMeal(meal)) {
     return res.status(404).send({ message: "Meal not found" });
   }
 

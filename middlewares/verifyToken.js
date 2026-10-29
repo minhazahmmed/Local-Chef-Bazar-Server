@@ -7,14 +7,19 @@ const verifyToken = (req, res, next) => {
     return res.status(401).send({ message: "unauthorized access" });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
-    if (error) {
-      return res.status(401).send({ message: "unauthorized access" });
-    }
+  jwt.verify(
+    token,
+    process.env.JWT_SECRET,
+    { algorithms: ["HS256"] },
+    (error, decoded) => {
+      if (error || !decoded?.email) {
+        return res.status(401).send({ message: "unauthorized access" });
+      }
 
-    req.decoded = decoded;
-    next();
-  });
+      req.decoded = decoded;
+      next();
+    }
+  );
 };
 
 module.exports = verifyToken;

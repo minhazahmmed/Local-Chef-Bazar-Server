@@ -4,17 +4,22 @@ const {
   reviewsCollection,
   mealsCollection,
   usersCollection,
+  ordersCollection,
 } = require("../config/db");
 const verifyToken = require("../middlewares/verifyToken");
+const optionalToken = require("../middlewares/optionalToken");
+const { verifyAdmin, verifyActive } = require("../middlewares/verifyRole");
 const updateMealRating = require("../utils/updateMealRating");
 
 const router = express.Router();
+
+const publicFilter = { status: { $nin: ["pending", "rejected"] } };
 
 router.get("/reviews", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 6, 1), 50);
 
   const reviews = await reviewsCollection
-    .find()
+    .find(publicFilter)
     .sort({ date: -1 })
     .limit(limit)
     .toArray();
@@ -22,9 +27,20 @@ router.get("/reviews", async (req, res) => {
   res.send(reviews);
 });
 
-router.get("/reviews/meal/:id", async (req, res) => {
+router.get("/reviews/admin", verifyToken, verifyAdmin, async (req, res) => {
+  const reviews = await reviewsCollection.find().sort({ date: -1 }).toArray();
+  res.send(reviews);
+});
+
+router.get("/reviews/meal/:id", optionalToken, async (req, res) => {
+  const conditions = [publicFilter];
+
+  if (req.decoded?.email) {
+    conditions.push({ status: "pending", reviewerEmail: req.decoded.email });
+  }
+
   const reviews = await reviewsCollection
-    .find({ foodId: req.params.id })
+    .find({ foodId: req.params.id, $or: conditions })
     .sort({ date: -1 })
     .toArray();
 
@@ -44,11 +60,31 @@ router.get("/reviews/user/:email", verifyToken, async (req, res) => {
   res.send(reviews);
 });
 
-router.post("/reviews", verifyToken, async (req, res) => {
+const hasOrdered = async (email, foodId) => {
+  const order = await ordersCollection.findOne({
+    userEmail: email,
+    foodId,
+    orderStatus: { $ne: "cancelled" },
+  });
+  return !!order;
+};
+
+router.get("/reviews/can-review/:foodId", verifyToken, async (req, res) => {
+  const canReview = await hasOrdered(req.decoded.email, req.params.foodId);
+  res.send({ canReview });
+});
+
+router.post("/reviews", verifyToken, verifyActive, async (req, res) => {
   const { foodId, rating, comment } = req.body;
 
-  if (!ObjectId.isValid(foodId)) {
+  if (typeof foodId !== "string" || !ObjectId.isValid(foodId)) {
     return res.status(400).send({ message: "Invalid meal id" });
+  }
+
+  if (typeof comment !== "string" || !comment.trim() || comment.length > 500) {
+    return res
+      .status(400)
+      .send({ message: "Comment is required (max 500 characters)" });
   }
 
   const numericRating = Number(rating);
@@ -67,6 +103,14 @@ router.post("/reviews", verifyToken, async (req, res) => {
     return res.status(400).send({ message: "You cannot review your own meal" });
   }
 
+  const ordered = await hasOrdered(req.decoded.email, foodId);
+
+  if (!ordered) {
+    return res
+      .status(403)
+      .send({ message: "You can review only the meals you have ordered" });
+  }
+
   const user = await usersCollection.findOne({ email: req.decoded.email });
 
   if (!user) {
@@ -80,15 +124,42 @@ router.post("/reviews", verifyToken, async (req, res) => {
     reviewerEmail: user.email,
     reviewerImage: user.image,
     rating: numericRating,
-    comment,
+    comment: comment.trim(),
+    status: "pending",
     date: new Date().toISOString(),
   });
 
-  await updateMealRating(foodId);
   res.send(result);
 });
 
-router.patch("/reviews/:id", verifyToken, async (req, res) => {
+router.patch("/reviews/:id/status", verifyToken, verifyAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid review id" });
+  }
+
+  if (!["approved", "rejected", "pending"].includes(status)) {
+    return res.status(400).send({ message: "Invalid status" });
+  }
+
+  const review = await reviewsCollection.findOne({ _id: new ObjectId(id) });
+
+  if (!review) {
+    return res.status(404).send({ message: "Review not found" });
+  }
+
+  const result = await reviewsCollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status } }
+  );
+
+  await updateMealRating(review.foodId);
+  res.send(result);
+});
+
+router.patch("/reviews/:id", verifyToken, verifyActive, async (req, res) => {
   const { id } = req.params;
 
   if (!ObjectId.isValid(id)) {
@@ -111,9 +182,23 @@ router.patch("/reviews/:id", verifyToken, async (req, res) => {
     return res.status(400).send({ message: "Rating must be between 1 and 5" });
   }
 
+  const newComment = req.body.comment;
+
+  if (typeof newComment !== "string" || !newComment.trim() || newComment.length > 500) {
+    return res
+      .status(400)
+      .send({ message: "Comment is required (max 500 characters)" });
+  }
+
   const result = await reviewsCollection.updateOne(
     { _id: new ObjectId(id) },
-    { $set: { rating: numericRating, comment: req.body.comment } }
+    {
+      $set: {
+        rating: numericRating,
+        comment: newComment.trim(),
+        status: "pending",
+      },
+    }
   );
 
   await updateMealRating(review.foodId);
@@ -134,7 +219,11 @@ router.delete("/reviews/:id", verifyToken, async (req, res) => {
   }
 
   if (review.reviewerEmail !== req.decoded.email) {
-    return res.status(403).send({ message: "forbidden access" });
+    const user = await usersCollection.findOne({ email: req.decoded.email });
+
+    if (user?.role !== "admin") {
+      return res.status(403).send({ message: "forbidden access" });
+    }
   }
 
   const result = await reviewsCollection.deleteOne({ _id: new ObjectId(id) });
