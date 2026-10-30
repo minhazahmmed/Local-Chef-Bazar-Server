@@ -1,25 +1,14 @@
-const jwt = require("jsonwebtoken");
+const getRequestEmail = require("../utils/getRequestEmail");
 
-const verifyToken = (req, res, next) => {
-  const token = req.cookies?.token;
+const verifyToken = async (req, res, next) => {
+  const email = await getRequestEmail(req);
 
-  if (!token) {
+  if (!email) {
     return res.status(401).send({ message: "unauthorized access" });
   }
 
-  jwt.verify(
-    token,
-    process.env.JWT_SECRET,
-    { algorithms: ["HS256"] },
-    (error, decoded) => {
-      if (error || !decoded?.email) {
-        return res.status(401).send({ message: "unauthorized access" });
-      }
-
-      req.decoded = decoded;
-      next();
-    }
-  );
+  req.decoded = { email };
+  next();
 };
 
 module.exports = verifyToken;

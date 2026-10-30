@@ -1,23 +1,13 @@
-const jwt = require("jsonwebtoken");
+const getRequestEmail = require("../utils/getRequestEmail");
 
-const optionalToken = (req, res, next) => {
-  const token = req.cookies?.token;
+const optionalToken = async (req, res, next) => {
+  const email = await getRequestEmail(req);
 
-  if (!token) {
-    return next();
+  if (email) {
+    req.decoded = { email };
   }
 
-  jwt.verify(
-    token,
-    process.env.JWT_SECRET,
-    { algorithms: ["HS256"] },
-    (error, decoded) => {
-      if (!error && decoded?.email) {
-        req.decoded = decoded;
-      }
-      next();
-    }
-  );
+  next();
 };
 
 module.exports = optionalToken;
