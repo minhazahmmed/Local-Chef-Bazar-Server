@@ -57,7 +57,6 @@ app.get("/", (req, res) => {
 app.use("/jwt", authLimiter);
 app.post("/users", authLimiter);
 
-// প্রতিটা request-এর আগে DB connection ready কিনা নিশ্চিত করে
 app.use(async (req, res, next) => {
   try {
     await connectDB();
