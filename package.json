@@ -12,7 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "engines": {
-  "node": "22.x"
+  "node": "26.x"
 },
   "dependencies": {
     "cookie-parser": "^1.4.7",
