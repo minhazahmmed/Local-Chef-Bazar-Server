@@ -19,7 +19,7 @@ router.get("/reviews", async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 6, 1), 50);
 
   const reviews = await reviewsCollection
-    .find(publicFilter)
+    .find(publicFilter, { projection: { reviewerEmail: 0 } })
     .sort({ date: -1 })
     .limit(limit)
     .toArray();
@@ -40,7 +40,10 @@ router.get("/reviews/meal/:id", optionalToken, async (req, res) => {
   }
 
   const reviews = await reviewsCollection
-    .find({ foodId: req.params.id, $or: conditions })
+   .find(
+  { foodId: req.params.id, $or: conditions },
+  { projection: { reviewerEmail: 0 } }
+)
     .sort({ date: -1 })
     .toArray();
 

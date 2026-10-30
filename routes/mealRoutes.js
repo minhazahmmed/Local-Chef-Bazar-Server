@@ -31,7 +31,7 @@ router.get("/meals", async (req, res) => {
 
   const total = await mealsCollection.countDocuments(visibleFilter);
   const meals = await mealsCollection
-    .find(visibleFilter)
+    .find(visibleFilter, { projection: { userEmail: 0 } })
     .sort(sortQuery)
     .skip((page - 1) * limit)
     .limit(limit)
